@@ -1,170 +1,89 @@
-* { box-sizing: border-box; }
+# CodeChef → GitHub Progress Tracker
 
-body {
-  width: 340px;
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  background: #16161f;
-  color: #f2f2f7;
-  font-size: 13px;
-}
+A Chrome extension that tracks the CodeChef problems you've solved, **categorizes
+them by rating**, and syncs your solution files plus an auto-generated progress
+dashboard to a GitHub repo of your choice.
 
-.tabs {
-  display: flex;
-  border-bottom: 1px solid #2a2a3d;
-}
+## What it does
 
-.tab-btn {
-  flex: 1;
-  background: transparent;
-  border: none;
-  color: #b8b8c8;
-  padding: 10px 6px;
-  cursor: pointer;
-  font-weight: 600;
-  font-size: 12px;
-  border-bottom: 2px solid transparent;
-}
+- Injects a small floating widget on CodeChef problem/status pages so you can
+  sync a solved problem in one click.
+- Best-effort auto-detects the problem code, name, and rating from the page,
+  and can fetch your latest **Accepted** submission's source code directly
+  from CodeChef (using your existing logged-in session — nothing is scraped
+  outside your own browser).
+- Everything is editable before syncing, and a **Manual Add** tab in the popup
+  lets you paste in a problem/solution by hand if auto-detection misses
+  something (CodeChef's page markup changes over time, so this is the reliable
+  fallback).
+- Pushes each solution to `Solutions/<rating-category>/<PROBLEMCODE>.<ext>` in
+  your GitHub repo via the GitHub REST API.
+- Regenerates `Solutions/README.md` after every sync — a running dashboard
+  with totals per category and links to each solved problem.
+- Rating categories are fully customizable (default buckets: 0-1199, 1200-1399,
+  1400-1599, 1600-1799, 1800-1999, 2000-2199, 2200-2499, 2500-2999, 3000+,
+  Unrated).
 
-.tab-btn.active {
-  color: #f2f2f7;
-  border-bottom: 2px solid #6c47ff;
-}
+## Install (load unpacked)
 
-.tab-panel {
-  display: none;
-  padding: 12px;
-  max-height: 480px;
-  overflow-y: auto;
-}
+1. Download/unzip this folder.
+2. Open `chrome://extensions` in Chrome.
+3. Turn on **Developer mode** (top-right toggle).
+4. Click **Load unpacked** and select this folder.
+5. Pin the extension from the puzzle-piece icon in the toolbar for quick access.
 
-.tab-panel.active {
-  display: block;
-}
+## Setup
 
-label {
-  display: block;
-  margin-bottom: 10px;
-  color: #b8b8c8;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
+1. Create (or pick) a GitHub repo to hold your solutions, e.g. `codechef-solutions`.
+2. Create a GitHub **Personal Access Token**:
+   - Go to GitHub → Settings → Developer settings → Personal access tokens →
+     Fine-grained tokens (or classic tokens with the `repo` scope).
+   - Grant it **Contents: Read and write** access to the repo you picked.
+3. Click the extension icon → **Settings** tab:
+   - Paste the token, your GitHub username (repo owner), repo name, branch
+     (e.g. `main`), and root folder (default `Solutions`).
+   - Optionally edit the rating category buckets (format: `label,min,max`,
+     one per line).
+   - Click **Save settings**, then **Test GitHub connection** to confirm it works.
 
-input, textarea {
-  width: 100%;
-  margin-top: 4px;
-  background: #2a2a3d;
-  border: 1px solid #3d3d54;
-  border-radius: 6px;
-  color: #f2f2f7;
-  padding: 7px 8px;
-  font-family: inherit;
-  font-size: 12px;
-  text-transform: none;
-}
+The token is stored only in `chrome.storage.local` on your machine — it is
+never sent anywhere except directly to `api.github.com`.
 
-textarea {
-  font-family: "SF Mono", Consolas, monospace;
-  resize: vertical;
-}
+## Using it
 
-.hint {
-  color: #888a9e;
-  font-size: 11px;
-  margin-bottom: 10px;
-  line-height: 1.4;
-}
+**On CodeChef:**
+- Open a problem you've solved (or its status page). A small "CodeChef →
+  GitHub" panel appears bottom-right.
+- Click **Fetch my latest Accepted solution** to auto-pull your AC code and
+  language for that problem.
+- Review/edit the problem code, name, rating, and language.
+- Click **Sync to GitHub**.
 
-.btn {
-  width: 100%;
-  padding: 9px 10px;
-  border-radius: 6px;
-  border: none;
-  font-weight: 600;
-  cursor: pointer;
-  margin-bottom: 8px;
-  font-size: 12px;
-}
+**From the popup:**
+- **Dashboard** tab: see total synced problems, counts per rating category,
+  and a list of everything synced so far, each linking to its file on GitHub.
+- **Manual Add** tab: paste in a problem's details and solution code directly
+  if you'd rather not use the on-page widget.
 
-.btn-primary { background: #6c47ff; color: white; }
-.btn-secondary { background: #3d3d54; color: #f2f2f7; }
+## Notes & limitations
 
-.status {
-  font-size: 11px;
-  color: #b8b8c8;
-  min-height: 14px;
-}
+- CodeChef doesn't expose a stable public API for a user's full solved-problem
+  history with ratings, so this extension relies on scraping the pages you
+  visit (status page, viewsolution page, problem page) using your own
+  logged-in session. Selectors have fallbacks but may need small tweaks if
+  CodeChef redesigns those pages — the Manual Add tab always works regardless.
+- Only one file per problem is kept (re-syncing overwrites the previous
+  version in place, so your latest accepted solution is always what's in the repo).
+- This runs entirely client-side in your browser; there is no external server.
 
-.summary {
-  display: flex;
-  justify-content: space-between;
-  background: #20202e;
-  border-radius: 8px;
-  padding: 10px 12px;
-  margin-bottom: 10px;
-}
+## File structure
 
-.summary .num {
-  font-size: 20px;
-  font-weight: 700;
-}
-
-.summary .label {
-  color: #b8b8c8;
-  font-size: 11px;
-}
-
-.cat-list {
-  margin-bottom: 10px;
-}
-
-.cat-row {
-  display: flex;
-  justify-content: space-between;
-  padding: 5px 8px;
-  background: #20202e;
-  border-radius: 6px;
-  margin-bottom: 4px;
-  font-size: 12px;
-}
-
-.cat-row .count {
-  color: #6c47ff;
-  font-weight: 700;
-}
-
-.problem-list {
-  max-height: 200px;
-  overflow-y: auto;
-}
-
-.problem-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 6px 8px;
-  border-bottom: 1px solid #2a2a3d;
-  font-size: 12px;
-}
-
-.problem-row .code {
-  font-weight: 700;
-}
-
-.problem-row .meta {
-  color: #888a9e;
-  font-size: 10px;
-}
-
-.problem-row a {
-  color: #8f7bff;
-  text-decoration: none;
-  font-size: 11px;
-}
-
-.empty {
-  color: #888a9e;
-  text-align: center;
-  padding: 20px 0;
-}
+```
+manifest.json      Extension manifest (MV3)
+background.js       Service worker: GitHub API calls, storage, README generation
+content.js          Injected widget + CodeChef page scraping
+content.css         Widget styling
+popup.html/.js/.css Settings + dashboard UI
+categories.js       Shared rating→category logic (used by background & popup)
+icons/              Toolbar icons
+```
