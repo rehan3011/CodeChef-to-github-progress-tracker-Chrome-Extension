@@ -1,0 +1,150 @@
+// popup.js
+
+function sendMessage(type, payload) {
+  return new Promise(resolve => {
+    chrome.runtime.sendMessage({ type, payload }, resolve);
+  });
+}
+
+// ---------- tabs ----------
+document.querySelectorAll(".tab-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById(btn.dataset.tab).classList.add("active");
+  });
+});
+
+// ---------- dashboard ----------
+async function renderDashboard() {
+  const { data: problems } = await sendMessage("GET_PROBLEMS");
+  const { data: settings } = await sendMessage("GET_SETTINGS");
+  const categories = settings.categories && settings.categories.length ? settings.categories : DEFAULT_CATEGORIES;
+
+  const list = Object.values(problems || {});
+  document.getElementById("summary").innerHTML = `
+    <div><div class="num">${list.length}</div><div class="label">Synced problems</div></div>
+    <div><div class="num">${list.filter(p => p.synced).length}</div><div class="label">On GitHub</div></div>
+  `;
+
+  const counts = {};
+  categories.forEach(c => (counts[c.label] = 0));
+  list.forEach(p => {
+    const label = p.category || "Uncategorized";
+    counts[label] = (counts[label] || 0) + 1;
+  });
+
+  const catList = document.getElementById("catList");
+  catList.innerHTML = "";
+  Object.entries(counts).forEach(([label, count]) => {
+    if (count === 0) return;
+    const row = document.createElement("div");
+    row.className = "cat-row";
+    row.innerHTML = `<span>${label}</span><span class="count">${count}</span>`;
+    catList.appendChild(row);
+  });
+
+  const problemList = document.getElementById("problemList");
+  problemList.innerHTML = "";
+  if (!list.length) {
+    problemList.innerHTML = `<div class="empty">No problems synced yet. Solve something on CodeChef, then use the on-page widget or the Manual Add tab.</div>`;
+    return;
+  }
+  list
+    .sort((a, b) => new Date(b.syncedAt || 0) - new Date(a.syncedAt || 0))
+    .forEach(p => {
+      const row = document.createElement("div");
+      row.className = "problem-row";
+      row.innerHTML = `
+        <div>
+          <div class="code">${p.code}</div>
+          <div class="meta">${p.category || ""}${p.rating ? " · " + p.rating : ""}</div>
+        </div>
+        ${p.githubPath ? `<a href="${p.githubPath}" target="_blank">View</a>` : ""}
+      `;
+      problemList.appendChild(row);
+    });
+}
+
+// ---------- manual add ----------
+document.getElementById("addSyncBtn").addEventListener("click", async () => {
+  const payload = {
+    code: document.getElementById("addCode").value.trim().toUpperCase(),
+    name: document.getElementById("addName").value.trim(),
+    rating: document.getElementById("addRating").value
+      ? Number(document.getElementById("addRating").value)
+      : null,
+    language: document.getElementById("addLang").value.trim(),
+    solutionCode: document.getElementById("addCodeArea").value
+  };
+  const statusEl = document.getElementById("addStatus");
+  if (!payload.code || !payload.solutionCode.trim()) {
+    statusEl.textContent = "Problem code and solution code are required.";
+    return;
+  }
+  statusEl.textContent = "Syncing…";
+  const resp = await sendMessage("SYNC_PROBLEM", payload);
+  if (resp && resp.ok) {
+    statusEl.textContent = `Synced ${payload.code} → ${resp.data.category}`;
+    renderDashboard();
+  } else {
+    statusEl.textContent = `Error: ${resp ? resp.error : "unknown error"}`;
+  }
+});
+
+// ---------- settings ----------
+function categoriesToText(categories) {
+  return (categories || DEFAULT_CATEGORIES)
+    .map(c => `${c.label},${c.min},${c.max}`)
+    .join("\n");
+}
+
+function textToCategories(text) {
+  return text
+    .split("\n")
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => {
+      const [label, min, max] = line.split(",").map(s => s.trim());
+      return { label, min: Number(min), max: Number(max) };
+    });
+}
+
+async function loadSettings() {
+  const { data: settings } = await sendMessage("GET_SETTINGS");
+  document.getElementById("ghToken").value = settings.githubToken || "";
+  document.getElementById("repoOwner").value = settings.repoOwner || "";
+  document.getElementById("repoName").value = settings.repoName || "";
+  document.getElementById("branch").value = settings.branch || "main";
+  document.getElementById("folderRoot").value = settings.folderRoot || "Solutions";
+  document.getElementById("categoryEditor").value = categoriesToText(settings.categories);
+}
+
+document.getElementById("saveSettingsBtn").addEventListener("click", async () => {
+  const settings = {
+    githubToken: document.getElementById("ghToken").value.trim(),
+    repoOwner: document.getElementById("repoOwner").value.trim(),
+    repoName: document.getElementById("repoName").value.trim(),
+    branch: document.getElementById("branch").value.trim() || "main",
+    folderRoot: document.getElementById("folderRoot").value.trim() || "Solutions",
+    categories: textToCategories(document.getElementById("categoryEditor").value)
+  };
+  await sendMessage("SAVE_SETTINGS", settings);
+  document.getElementById("settingsStatus").textContent = "Settings saved.";
+});
+
+document.getElementById("testConnBtn").addEventListener("click", async () => {
+  const statusEl = document.getElementById("settingsStatus");
+  statusEl.textContent = "Testing…";
+  const resp = await sendMessage("TEST_CONNECTION");
+  if (resp && resp.ok) {
+    statusEl.textContent = `Connected to ${resp.data.fullName} (${resp.data.private ? "private" : "public"})`;
+  } else {
+    statusEl.textContent = `Error: ${resp ? resp.error : "unknown error"}`;
+  }
+});
+
+// ---------- init ----------
+loadSettings();
+renderDashboard();

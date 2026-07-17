@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "CodeChef → GitHub Progress Tracker",
+  "version": "1.0.0",
+  "description": "Tracks your solved CodeChef problems, categorizes them by rating, and syncs your solutions + progress dashboard to a GitHub repo.",
+  "permissions": ["storage", "activeTab", "scripting", "notifications"],
+  "host_permissions": [
+    "https://www.codechef.com/*",
+    "https://api.github.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.codechef.com/status/*",
+        "https://www.codechef.com/submit/*",
+        "https://www.codechef.com/viewsolution/*",
+        "https://www.codechef.com/*/problems/*",
+        "https://www.codechef.com/problems/*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

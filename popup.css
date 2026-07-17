@@ -1,0 +1,234 @@
+// content.js — runs on codechef.com pages.
+// Injects a floating "Sync to GitHub" widget that:
+//  1. Best-effort detects problem code / name / rating from the current page.
+//  2. Can fetch your latest Accepted submission's source code (same-origin fetch,
+//     so your CodeChef session cookies are used automatically).
+//  3. Lets you review/edit everything before sending it to the background
+//     service worker, which pushes it to GitHub and updates the progress README.
+//
+// NOTE: CodeChef's HTML structure changes over time and differs between the
+// old and new site skins. The selectors below use several fallbacks, but if
+// CodeChef changes their markup, use the manual fields in the widget — nothing
+// here silently fails, it just leaves fields blank for you to fill in.
+
+(function () {
+  if (window.__cc_gh_tracker_injected) return;
+  window.__cc_gh_tracker_injected = true;
+
+  const CC_BASE = "https://www.codechef.com";
+
+  function getProblemCodeFromUrl() {
+    const m1 = location.pathname.match(/\/problems\/([A-Za-z0-9_]+)/);
+    if (m1) return m1[1];
+    const m2 = location.pathname.match(/\/status\/([A-Za-z0-9_]+)/);
+    if (m2) return m2[1].split(",")[0];
+    const m3 = location.pathname.match(/\/viewsolution\/(\d+)/);
+    if (m3) return null; // code not derivable from URL alone
+    return null;
+  }
+
+  function guessProblemName() {
+    const h1 = document.querySelector("h1");
+    if (h1 && h1.textContent.trim()) return h1.textContent.trim();
+    if (document.title) return document.title.replace(/\s*[\|\-]\s*CodeChef.*/i, "").trim();
+    return "";
+  }
+
+  function guessRatingFromDom() {
+    const bodyText = document.body ? document.body.innerText : "";
+    const patterns = [
+      /Difficulty Rating[:\s]*([0-9]{3,4})/i,
+      /Rating[:\s]*([0-9]{3,4})/i,
+      /problem[- ]?rating[:\s]*([0-9]{3,4})/i
+    ];
+    for (const re of patterns) {
+      const m = bodyText.match(re);
+      if (m) return Number(m[1]);
+    }
+    // Star-based difficulty (e.g. "3★") — leave rating blank, widget lets user type it.
+    return null;
+  }
+
+  function getCurrentUsername() {
+    const link = document.querySelector('a[href^="/users/"]');
+    if (link) {
+      const m = link.getAttribute("href").match(/\/users\/([A-Za-z0-9_]+)/);
+      if (m) return m[1];
+    }
+    return null;
+  }
+
+  async function fetchText(url) {
+    const res = await fetch(url, { credentials: "include" });
+    if (!res.ok) throw new Error(`Fetch failed: ${res.status} for ${url}`);
+    return res.text();
+  }
+
+  // Finds the most recent Accepted submission for a problem code for the logged-in user,
+  // then fetches its source from the viewsolution page.
+  async function fetchLatestAcceptedSolution(problemCode) {
+    const username = getCurrentUsername();
+    const statusUrl = username
+      ? `${CC_BASE}/status/${problemCode},${username}?page=0`
+      : `${CC_BASE}/status/${problemCode}?page=0`;
+
+    const html = await fetchText(statusUrl);
+    const doc = new DOMParser().parseFromString(html, "text/html");
+
+    const rows = Array.from(doc.querySelectorAll("table tr"));
+    let submissionId = null;
+    let language = "";
+
+    for (const row of rows) {
+      const text = row.textContent || "";
+      if (/\bAC\b|Accepted/i.test(text)) {
+        const link = row.querySelector('a[href*="/viewsolution/"]');
+        if (link) {
+          const m = link.getAttribute("href").match(/\/viewsolution\/(\d+)/);
+          if (m) {
+            submissionId = m[1];
+            const cells = row.querySelectorAll("td");
+            if (cells.length >= 4) language = cells[3].textContent.trim();
+            break;
+          }
+        }
+      }
+    }
+
+    if (!submissionId) {
+      throw new Error(
+        "No Accepted submission found on the status page. Make sure you're logged in and have an AC verdict for this problem."
+      );
+    }
+
+    const solHtml = await fetchText(`${CC_BASE}/viewsolution/${submissionId}`);
+    const solDoc = new DOMParser().parseFromString(solHtml, "text/html");
+    const codeEl =
+      solDoc.querySelector("pre#problem-code") ||
+      solDoc.querySelector("pre.prettyprint") ||
+      solDoc.querySelector("textarea") ||
+      solDoc.querySelector("pre");
+
+    const code = codeEl ? codeEl.textContent : "";
+    return { submissionId, language, code };
+  }
+
+  // ---------------- UI ----------------
+  function el(tag, attrs = {}, children = []) {
+    const e = document.createElement(tag);
+    Object.entries(attrs).forEach(([k, v]) => {
+      if (k === "class") e.className = v;
+      else if (k === "text") e.textContent = v;
+      else e.setAttribute(k, v);
+    });
+    children.forEach(c => e.appendChild(c));
+    return e;
+  }
+
+  function buildWidget() {
+    const wrap = el("div", { class: "cc-gh-widget", id: "cc-gh-widget" });
+
+    const header = el("div", { class: "cc-gh-header" });
+    const title = el("span", { text: "⬆ CodeChef → GitHub" });
+    const toggle = el("button", { class: "cc-gh-toggle", text: "–" });
+    header.appendChild(title);
+    header.appendChild(toggle);
+    wrap.appendChild(header);
+
+    const body = el("div", { class: "cc-gh-body" });
+
+    const codeInput = el("input", { type: "text", placeholder: "Problem code (e.g. TLE)" });
+    const nameInput = el("input", { type: "text", placeholder: "Problem name" });
+    const ratingInput = el("input", { type: "number", placeholder: "Rating (e.g. 1600)" });
+    const langInput = el("input", { type: "text", placeholder: "Language (e.g. C++17)" });
+    const codeArea = el("textarea", { placeholder: "Solution source code", rows: "8" });
+
+    codeInput.value = getProblemCodeFromUrl() || "";
+    nameInput.value = guessProblemName();
+    const guessedRating = guessRatingFromDom();
+    if (guessedRating) ratingInput.value = guessedRating;
+
+    const fetchBtn = el("button", {
+      class: "cc-gh-btn cc-gh-btn-secondary",
+      text: "Fetch my latest Accepted solution"
+    });
+    const statusMsg = el("div", { class: "cc-gh-status" });
+
+    fetchBtn.addEventListener("click", async () => {
+      const code = codeInput.value.trim();
+      if (!code) {
+        statusMsg.textContent = "Enter a problem code first.";
+        return;
+      }
+      statusMsg.textContent = "Fetching your latest AC submission…";
+      try {
+        const { language, code: sourceCode } = await fetchLatestAcceptedSolution(code);
+        if (language) langInput.value = language;
+        codeArea.value = sourceCode;
+        statusMsg.textContent = "Fetched! Review below, then Sync.";
+      } catch (err) {
+        statusMsg.textContent = `Error: ${err.message}`;
+      }
+    });
+
+    const syncBtn = el("button", { class: "cc-gh-btn cc-gh-btn-primary", text: "Sync to GitHub" });
+    syncBtn.addEventListener("click", () => {
+      const payload = {
+        code: codeInput.value.trim().toUpperCase(),
+        name: nameInput.value.trim(),
+        rating: ratingInput.value ? Number(ratingInput.value) : null,
+        language: langInput.value.trim(),
+        solutionCode: codeArea.value
+      };
+      if (!payload.code) {
+        statusMsg.textContent = "Problem code is required.";
+        return;
+      }
+      if (!payload.solutionCode.trim()) {
+        statusMsg.textContent = "Paste or fetch the solution code first.";
+        return;
+      }
+      statusMsg.textContent = "Syncing…";
+      chrome.runtime.sendMessage({ type: "SYNC_PROBLEM", payload }, resp => {
+        if (resp && resp.ok) {
+          statusMsg.textContent = `Synced ${payload.code} → ${resp.data.category}`;
+        } else {
+          statusMsg.textContent = `Error: ${resp ? resp.error : "unknown error"}`;
+        }
+      });
+    });
+
+    [
+      labeled("Problem code", codeInput),
+      labeled("Problem name", nameInput),
+      labeled("Rating", ratingInput),
+      labeled("Language", langInput),
+      labeled("Solution code", codeArea)
+    ].forEach(node => body.appendChild(node));
+
+    body.appendChild(fetchBtn);
+    body.appendChild(syncBtn);
+    body.appendChild(statusMsg);
+
+    wrap.appendChild(body);
+
+    let collapsed = false;
+    toggle.addEventListener("click", () => {
+      collapsed = !collapsed;
+      body.style.display = collapsed ? "none" : "block";
+      toggle.textContent = collapsed ? "+" : "–";
+    });
+
+    function labeled(text, input) {
+      const l = el("label", { class: "cc-gh-label" });
+      l.appendChild(el("span", { text }));
+      l.appendChild(input);
+      return l;
+    }
+
+    return wrap;
+  }
+
+  const widget = buildWidget();
+  document.documentElement.appendChild(widget);
+})();
